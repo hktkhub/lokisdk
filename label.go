@@ -14,7 +14,7 @@ const (
 	Service labelKey = "service"
 	// Env 标识部署环境，对应维度 "env"。
 	Env labelKey = "env"
-	// Level 标识日志级别，取值为 debug/info/warn/error。
+	// Level 标识日志级别，取值为 debug/info/warn/error/metric。
 	Level labelKey = "level"
 )
 
