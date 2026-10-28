@@ -19,6 +19,7 @@ import (
 //   - LevelInfo（info）
 //   - LevelWarn（warn）
 //   - LevelError（error）
+//   - LevelMetric（metric）
 type LogLevel string
 
 // 日志级别枚举值。
@@ -31,11 +32,17 @@ const (
 	LevelWarn LogLevel = "warn"
 	// LevelError 是错误级别。
 	LevelError LogLevel = "error"
+	// LevelMetric 是埋点专用的特殊级别，不参与 debug < info < warn < error 的级别排序。
+	//
+	// 该级别始终会被写入，不受 WithMinLevel 过滤；当前也不做降采样，调用方每写一条
+	// 就会发送一条。使用者应自行控制埋点频率与数据量，避免产生过高的写入与存储开销。
+	LevelMetric LogLevel = "metric"
 )
 
 // levelSeverity 返回日志级别的数值权重，值越大级别越高；未知级别返回 -1。
 //
-// 该权重同时用于级别过滤与 WithMinLevel 的合法性校验。
+// 该权重同时用于级别过滤与 WithMinLevel 的合法性校验。LevelMetric 是排序之外的
+// 特殊级别，这里返回 -1，由 levelEnabled 单独放行。
 func levelSeverity(level LogLevel) int {
 	switch level {
 	case LevelDebug:
@@ -54,9 +61,13 @@ func levelSeverity(level LogLevel) int {
 // levelEnabled 判断给定级别是否达到默认发送端的最低输出级别。
 //
 // 未设置默认发送端或低于最低级别时返回 false，日志会被直接丢弃。
+// LevelMetric 是埋点专用的特殊级别，不受 WithMinLevel 过滤，始终放行。
 func levelEnabled(level LogLevel) bool {
 	if defaultSender == nil {
 		return false
+	}
+	if level == LevelMetric {
+		return true
 	}
 	return levelSeverity(level) >= levelSeverity(defaultSender.minLevel)
 }
@@ -102,11 +113,20 @@ func Error(ctx context.Context, format string, args ...any) {
 
 // LogWithFields 以指定级别写入一条带结构化字段的日志。
 //
-// level 必须是 LevelDebug、LevelInfo、LevelWarn、LevelError 之一；
+// level 必须是 LevelDebug、LevelInfo、LevelWarn、LevelError、LevelMetric 之一；
 // fields 会被编码成 JSON 追加到正文之后，便于在 Loki 中检索。
 func LogWithFields(ctx context.Context, level LogLevel, msg string, fields ...Field) {
 	defer recoverEmit()
 	emit(ctx, level, msg, fields...)
+}
+
+// MetricWithFields 以 LevelMetric 级别写入一条埋点数据。
+//
+// 等价于 LogWithFields(ctx, LevelMetric, msg, fields...)。该级别始终写入且不做降采样，
+// 调用方应自行控制埋点频率与数据量。
+func MetricWithFields(ctx context.Context, msg string, fields ...Field) {
+	defer recoverEmit()
+	emit(ctx, LevelMetric, msg, fields...)
 }
 
 // ErrorWithCode 以 error 级别写入一条带错误码的日志。

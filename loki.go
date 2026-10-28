@@ -223,6 +223,7 @@ func WithMaxBufferBytes(n int64) Option {
 // WithMinLevel 设置最低输出级别，低于该级别的日志会被直接丢弃；level 非法时忽略。
 //
 // 级别由低到高为 debug < info < warn < error。默认 LevelDebug，即不限制。
+// LevelMetric 是埋点专用的特殊级别，不受该过滤影响，始终写入。
 func WithMinLevel(level LogLevel) Option {
 	return func(o *options) {
 		if levelSeverity(level) >= 0 {
