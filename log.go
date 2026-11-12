@@ -144,7 +144,7 @@ func emit(ctx context.Context, level LogLevel, msg string, fields ...Field) {
 	if defaultSender == nil {
 		return
 	}
-	
+
 	if !levelEnabled(level) {
 		return
 	}
@@ -153,11 +153,11 @@ func emit(ctx context.Context, level LogLevel, msg string, fields ...Field) {
 
 	defaults := make([]Field, 0)
 	defaults = append(defaults,
-        Field{Key: "logid", Value: LogID(ctx)},
-        Field{Key: "requestid", Value: RequestID(ctx)},
-        Field{Key: "loc", Value: caller()},
-        Field{Key: "time", Value: now.UnixMilli()},
-    )
+		Field{Key: "logid", Value: LogID(ctx)},
+		Field{Key: "requestid", Value: RequestID(ctx)},
+		Field{Key: "loc", Value: caller()},
+		Field{Key: "time", Value: now.UnixMilli()},
+	)
 	defaults = append(defaults, fields...)
 
 	defaultSender.disp.enqueue(entry{
@@ -194,9 +194,8 @@ func RequestID(ctx context.Context) string {
 }
 
 const (
-	callerSkip      = 2
-	callerDepth     = 16
-	callerPkgPrefix = "gitee.com/tkhub/lokisdk."
+	callerSkip  = 2
+	callerDepth = 16
 )
 
 // LogID 读取 ctx 中的 logid，缺失时现场生成一个 UUIDv7。
@@ -237,7 +236,7 @@ func caller() string {
 	frames := runtime.CallersFrames(pcs[:n])
 	for {
 		frame, more := frames.Next()
-		if !strings.HasPrefix(frame.Function, callerPkgPrefix) {
+		if !strings.Contains(frame.Function, "/lokisdk.") {
 			return fmt.Sprintf("%s:%d", filepath.Base(frame.File), frame.Line)
 		}
 		if !more {
