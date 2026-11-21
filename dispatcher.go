@@ -42,8 +42,10 @@ type dispatcher struct {
 	buf      []entry
 	bufBytes int64
 	dropped  uint64
-	failed   uint64
-	closed   bool
+	// droppedByLevel 记录缓冲满被丢弃的日志条数，按 level 聚合。
+	droppedByLevel map[string]uint64
+	failed         uint64
+	closed         bool
 
 	notify   chan struct{}
 	done     chan struct{}
@@ -69,6 +71,7 @@ func newDispatcher(
 		push:           push,
 		ctx:            ctx,
 		cancel:         cancel,
+		droppedByLevel: make(map[string]uint64),
 		notify:         make(chan struct{}, 1),
 		done:           make(chan struct{}),
 		finished:       make(chan struct{}),
@@ -103,13 +106,27 @@ func (d *dispatcher) run() {
 }
 
 // enqueue 非阻塞地写入一条日志；缓冲已满或已关闭时丢弃并计入 dropped。
+//
+// 因缓冲已满被丢弃的日志会按 level 聚合到 droppedByLevel，并在下一次
+// take 时追加一条 logs_dropped 汇总日志，便于在 Loki 中观察丢失情况。
 func (d *dispatcher) enqueue(e entry) {
 	size := entrySize(e)
 
 	d.mu.Lock()
-	if d.closed || d.bufBytes+size > d.maxBufferBytes {
+	if d.closed {
 		d.dropped++
 		d.mu.Unlock()
+		return
+	}
+	if d.bufBytes+size > d.maxBufferBytes {
+		d.dropped++
+		if d.droppedByLevel == nil {
+			d.droppedByLevel = make(map[string]uint64)
+		}
+		d.droppedByLevel[entryLevel(e)]++
+		d.mu.Unlock()
+		// 触发一次发送，尽快清空缓冲并把丢弃统计带出去
+		d.signal()
 		return
 	}
 	d.buf = append(d.buf, e)
@@ -176,16 +193,55 @@ func (d *dispatcher) close(ctx context.Context) error {
 }
 
 // take 取出当前缓冲并重置体积计数。
+//
+// 若存在因缓冲满被丢弃的日志，会额外追加一条 logs_dropped 汇总日志，
+// 内容包含被丢弃日志的 level 与条数；该汇总日志不占用缓冲上限。
 func (d *dispatcher) take() []entry {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.buf) == 0 {
-		return nil
-	}
+
 	batch := d.buf
 	d.buf = nil
 	d.bufBytes = 0
-	return batch
+
+	if len(d.droppedByLevel) == 0 {
+		return batch
+	}
+	return append(batch, d.dropSummaryLocked())
+}
+
+// dropSummaryLocked 构造并重置一次丢弃事件汇总，调用方必须持有 d.mu。
+func (d *dispatcher) dropSummaryLocked() entry {
+	counts := make(map[string]uint64, len(d.droppedByLevel))
+	var total uint64
+	for level, n := range d.droppedByLevel {
+		counts[level] = n
+		total += n
+	}
+	d.droppedByLevel = make(map[string]uint64)
+
+	now := time.Now()
+	return entry{
+		time:   now,
+		labels: []Label{{Key: Level, Value: string(LevelWarn)}},
+		line: formatLine("loki logs dropped", []Field{
+			{Key: "event", Value: "logs_dropped"},
+			{Key: "reason", Value: "buffer_full"},
+			{Key: "dropped", Value: counts},
+			{Key: "dropped_total", Value: total},
+			{Key: "time", Value: now.UnixMilli()},
+		}),
+	}
+}
+
+// entryLevel 从 entry 的标签中取日志级别，缺失时返回 unknown。
+func entryLevel(e entry) string {
+	for _, l := range e.labels {
+		if l.Key == Level && l.Value != "" {
+			return l.Value
+		}
+	}
+	return "unknown"
 }
 
 // signal 非阻塞地通知后台循环立即发送。
